@@ -25,7 +25,6 @@ async function main() {
   const db = getFirestore();
   const minimumCount = await loadPopularMinCount(db);
   const snapshot = await db.collectionGroup("popularWallpapers")
-      .where("score", ">=", MIN_SCORE)
       .get();
 
   const candidatesByApp = new Map();
@@ -33,7 +32,8 @@ async function main() {
     const data = document.data();
     const appDocument = document.ref.parent.parent;
     if (!appDocument || data.appId !== appDocument.id ||
-        data.imageId !== document.id || !Number.isFinite(data.score)) {
+        data.imageId !== document.id || !Number.isFinite(data.score) ||
+        data.score < MIN_SCORE) {
       continue;
     }
 

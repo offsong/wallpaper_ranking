@@ -71,4 +71,49 @@ jobs:
 
       - name: Refresh summaries
         if: steps.credential.outputs.configured == 'true'
+        env:
+          POPULAR_JSON_OUTPUT_DIR: ${{ runner.temp }}/popular_json
         run: node functions/index.js
+
+      - name: Publish static JSON to offsong.github.io
+        if: steps.credential.outputs.configured == 'true'
+        env:
+          PAGES_DEPLOY_TOKEN: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          OUTPUT_DIR="${{ runner.temp }}/popular_json"
+          if [ ! -d "$OUTPUT_DIR" ] || [ -z "$(ls -A "$OUTPUT_DIR" 2>/dev/null)" ]; then
+            echo "No popular JSON files generated for $FIREBASE_PROJECT_ID, skipping publish."
+            exit 0
+          fi
+          if [ -z "${PAGES_DEPLOY_TOKEN:-}" ]; then
+            echo "::warning::PAGES_DEPLOY_TOKEN secret is not configured; skipping static JSON publish."
+            exit 0
+          fi
+
+          PAGES_DIR="${{ runner.temp }}/offsong-popular-pages"
+          git clone --depth 1 "https://x-access-token:${PAGES_DEPLOY_TOKEN}@github.com/offsong/popular.git" "$PAGES_DIR"
+
+          cp "$OUTPUT_DIR"/*.json "$PAGES_DIR/"
+
+          cd "$PAGES_DIR"
+          git config user.name "popular-summary-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add ./*.json
+          if git diff --cached --quiet; then
+            echo "No changes to publish for $FIREBASE_PROJECT_ID."
+            exit 0
+          fi
+          git commit -m "Update popular wallpaper summaries (${{ matrix.project }})"
+
+          # Other matrix jobs may push to the same pages repo concurrently; retry on conflict.
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD; then
+              exit 0
+            fi
+            echo "Push rejected, retrying ($attempt)..."
+            sleep $((attempt * 3))
+            git pull --rebase origin HEAD
+          done
+          echo "::error::Failed to push popular JSON for $FIREBASE_PROJECT_ID after multiple retries."
+          exit 1

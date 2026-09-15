@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const {cert, initializeApp} = require("firebase-admin/app");
 const {FieldValue, getFirestore} = require("firebase-admin/firestore");
 
@@ -6,6 +8,11 @@ const DEFAULT_MIN_COUNT = 20;
 const MAX_COUNT = 100;
 const VERSION_CONFIG_URL =
   "https://offsong.github.io/version_check/version.json";
+// Static JSON mirror of popularSummary/current, published to
+// https://offsong.github.io/popular/{appId}.json so the Android client can read it
+// with a plain HTTPS GET instead of a Firestore read (which required creating an
+// anonymous Firebase Auth user on every fresh install just to view the ranking).
+const JSON_OUTPUT_DIR = process.env.POPULAR_JSON_OUTPUT_DIR || null;
 
 async function main() {
   const serviceAccount = readServiceAccount();
@@ -46,7 +53,6 @@ async function main() {
       updatedAt: timestampMillis(data.updatedAt),
     });
   }
-
   let updatedApps = 0;
   for (const [appId, candidates] of candidatesByApp) {
     candidates.sort(compareCandidates);
@@ -54,6 +60,7 @@ async function main() {
 
     const images = candidates.slice(0, MAX_COUNT)
         .map((candidate) => candidate.imageId);
+    const updatedAt = new Date();
     await db.collection("gameApps").doc(appId)
         .collection("popularSummary").doc("current")
         .set({
@@ -63,6 +70,7 @@ async function main() {
           minimumCount,
           eligibleCount: candidates.length,
         });
+    writeJsonSummary(appId, images, updatedAt);
     updatedApps += 1;
   }
 
@@ -74,7 +82,6 @@ async function main() {
     minimumCount,
   });
 }
-
 function readServiceAccount() {
   const value = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (!value) {
@@ -122,9 +129,25 @@ async function loadPopularMinCount(db) {
     return isValidMinimumCount(value) ? value : DEFAULT_MIN_COUNT;
   }
 }
-
 function isValidMinimumCount(value) {
   return Number.isInteger(value) && value >= 1 && value <= MAX_COUNT;
+}
+
+// Mirrors the same ranking as a static JSON file, in the format documented in
+// popular_pipeline/README.md, for the Android client to fetch directly.
+function writeJsonSummary(appId, images, updatedAt) {
+  if (!JSON_OUTPUT_DIR) return;
+  try {
+    fs.mkdirSync(JSON_OUTPUT_DIR, {recursive: true});
+    const filePath = path.join(JSON_OUTPUT_DIR, `${appId}.json`);
+    const body = JSON.stringify({
+      updatedAt: updatedAt.toISOString(),
+      images,
+    });
+    fs.writeFileSync(filePath, body);
+  } catch (error) {
+    console.error(`Failed to write JSON summary for ${appId}`, error);
+  }
 }
 
 function timestampMillis(value) {
